@@ -1,0 +1,423 @@
+{
+  "name": "DeepScan - Deepfake Image Detection",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "DeepScan: Deepfake Image Detector",
+        "formDescription": "Upload a face image (.jpg, .jpeg or .png) and DeepScan will tell you whether it looks REAL or FAKE.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Image",
+              "fieldType": "file",
+              "fieldName": "image",
+              "multipleFiles": false,
+              "acceptFileTypes": ".jpg, .jpeg, .png",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "buttonLabel": "Scan Image"
+        }
+      },
+      "id": "ed5c1eaf-b5fd-416f-8be3-e276fc043c73",
+      "name": "Upload Image",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        192
+      ],
+      "webhookId": "d57ad960-0705-4879-b8e9-f2a626be3277"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "models/gemini-3.5-flash-lite"
+        },
+        "text": "You are a deepfake and AI-generated image detector. Examine this image for artifacts such as unnatural skin texture, inconsistent lighting, warped edges, distorted hands or teeth, and background anomalies. Respond ONLY with JSON: {\"verdict\": \"FAKE\" or \"REAL\", \"confidence\": number from 0 to 100, \"reason\": \"one short sentence\"}",
+        "inputType": "binary",
+        "binaryPropertyName": "image",
+        "options": {
+          "maxOutputTokens": 1024
+        }
+      },
+      "id": "887378ee-5383-46a5-8dc1-12f236908f7d",
+      "name": "Analyze Image with Gemini",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "aYllaAVXMCMMMyge",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect the text Gemini returned (handles simplified and raw shapes).\nfunction collectText(j) {\n  if (!j) return '';\n  if (typeof j === 'string') return j;\n  if (typeof j.text === 'string') return j.text;\n  if (j.content && Array.isArray(j.content.parts)) {\n    return j.content.parts.map(p => p.text || '').join('');\n  }\n  if (Array.isArray(j.candidates)) {\n    return j.candidates.map(c => collectText(c)).join('');\n  }\n  if (Array.isArray(j.parts)) return j.parts.map(p => p.text || '').join('');\n  return '';\n}\n\nconst raw = $input.all().map(i => collectText(i.json)).join('').trim();\nif (!raw) {\n  throw new Error('Gemini returned no text: ' + JSON.stringify($input.first().json));\n}\n\n// Strip markdown fences, then take the first {...} block.\nlet cleaned = raw.replace(/```(?:json)?/gi, '').trim();\nconst start = cleaned.indexOf('{');\nconst end = cleaned.lastIndexOf('}');\nif (start !== -1 && end > start) cleaned = cleaned.slice(start, end + 1);\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  throw new Error('Could not parse Gemini JSON: ' + raw);\n}\n\nconst verdict = /fake/i.test(String(parsed.verdict || '')) ? 'FAKE' : 'REAL';\nlet confidence = parseFloat(String(parsed.confidence ?? '').replace(/[^0-9.]/g, ''));\nif (isNaN(confidence)) confidence = 0;\nif (confidence > 0 && confidence <= 1) confidence = confidence * 100;\nconfidence = Math.round(Math.min(100, Math.max(0, confidence)) * 10) / 10;\n\nlet filename = 'unknown';\ntry {\n  filename = $('Upload Image').first().binary?.image?.fileName || 'unknown';\n} catch (e) {}\n\nreturn [{\n  json: {\n    verdict,\n    confidence,\n    label: String(parsed.reason || 'No reason given'),\n    filename,\n  },\n}];"
+      },
+      "id": "4065d5a6-0c67-4867-a894-cc7df6342628",
+      "name": "Parse Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.verdict }}",
+              "rightValue": "FAKE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f54b6fef-e83d-48d0-9519-282eeb0f51f9",
+      "name": "Is Fake?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "FAKE",
+        "completionMessage": "=⚠️ Deepfake detected. Confidence: {{ $json.confidence }}%\n\nReason: {{ $json.label }}",
+        "options": {}
+      },
+      "id": "74b2051e-a190-4283-8a62-5867d2092041",
+      "name": "Show Fake Result",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        896,
+        0
+      ],
+      "webhookId": "09cdc572-482e-40a1-9c76-35cb60c2a527"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "10CEAuek2FZbLssUD0tGXoRLIPLytVff2uHLFCIw6K5k",
+          "cachedResultName": "DeepScan Logs",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/10CEAuek2FZbLssUD0tGXoRLIPLytVff2uHLFCIw6K5k/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.toISO() }}",
+            "Filename": "={{ $('Parse Result').item.json.filename }}",
+            "Verdict": "={{ $('Parse Result').item.json.verdict }}",
+            "Confidence": "={{ $('Parse Result').item.json.confidence }}",
+            "Label": "={{ $('Parse Result').item.json.label }}"
+          },
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false,
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Filename",
+              "displayName": "Filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Verdict",
+              "displayName": "Verdict",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Confidence",
+              "displayName": "Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Label",
+              "displayName": "Label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5430810d-d394-4bee-86c1-8ce01b04651c",
+      "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        896,
+        384
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BXlCysdkjoSDsOnk",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "REAL",
+        "completionMessage": "=✅ Image looks authentic. Confidence: {{ $json.confidence }}%\n\nReason: {{ $json.label }}",
+        "options": {}
+      },
+      "id": "0bf21466-1b33-4555-bf7d-6532bfcb08d2",
+      "name": "Show Real Result",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        896,
+        192
+      ],
+      "webhookId": "b91188a9-97e2-4f64-936b-63fc3b24531c"
+    },
+    {
+      "parameters": {
+        "content": "## DeepScan - Deepfake Image Detection\nA user uploads an image through a web form. Google Gemini (gemini-3.5-flash-lite) analyzes it, and the form shows REAL or FAKE with a confidence score.",
+        "height": 144,
+        "width": 404,
+        "color": 4
+      },
+      "id": "ef03c2e8-4bcd-44d9-b9fe-b5d38e843b7e",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        208,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 1. Upload Image\nPublic web form with one required file field **image** (.jpg, .jpeg, .png). The file arrives as binary data.",
+        "width": 160
+      },
+      "id": "fdbc6a30-fa77-4d6c-951a-5d5ac95e3720",
+      "name": "Note Upload",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 2. Analyze Image with Gemini\nSends the uploaded image to **gemini-3.5-flash-lite** with a deepfake-detection prompt. Gemini replies with JSON: verdict, confidence and a one-sentence reason. Retries once on failure.",
+        "height": 208,
+        "width": 214
+      },
+      "id": "d6367400-b98d-4be4-bb95-ffe181bbb8ee",
+      "name": "Note Model",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 3. Parse Result\nStrips markdown fences, parses Gemini's JSON and outputs verdict, confidence (1 decimal), label (the reason) and filename.",
+        "height": 192,
+        "width": 160
+      },
+      "id": "801a5966-a3ec-458c-97a7-d93c638e706b",
+      "name": "Note Parse",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        416,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 4. Is Fake?\nRoutes to the FAKE page when verdict = FAKE, otherwise to the REAL page.",
+        "height": 128,
+        "width": 160
+      },
+      "id": "0a6924aa-f3d8-407a-9989-27827c8c8e9e",
+      "name": "Note If",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        640,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 5. Show Result\nForm completion pages show the verdict, confidence and Gemini's reason.",
+        "height": 128,
+        "width": 160
+      },
+      "id": "b9e5d73b-0d07-4f5f-966c-af7dedbb568e",
+      "name": "Note Result",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        864,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 6. Log to Sheet (optional)\nAppends Timestamp, Filename, Verdict, Confidence and Label to the DeepScan Logs sheet. Runs after both the FAKE and REAL branches. Errors here are ignored so the demo keeps working.",
+        "height": 224,
+        "width": 160
+      },
+      "id": "5cf52256-cc1d-4e5b-ad2f-bf32695f1d80",
+      "name": "Note Log",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        864,
+        592
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Upload Image": {
+      "main": [
+        [
+          {
+            "node": "Analyze Image with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Image with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Parse Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Result": {
+      "main": [
+        [
+          {
+            "node": "Is Fake?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Fake?": {
+      "main": [
+        [
+          {
+            "node": "Show Fake Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Real Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d1ce8a7f-132c-4647-8145-1d0fd1c5e0ed",
+  "meta": {
+    "instanceId": "999e0b5229634b85dff76a16f7e1f2f50bcf5104abfec9db817a9fc00eb038a4"
+  },
+  "nodeGroups": [],
+  "id": "qWocQHtJbNGmzkeJ",
+  "tags": []
+}
